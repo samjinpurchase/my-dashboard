@@ -1,8 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState, useEffect } from "react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend
 } from "recharts";
+import { auth, loginWithGoogle, logout, ALLOWED_EMAILS, HOST_EMAILS } from "./firebase";
+import { onAuthStateChanged } from "firebase/auth";
 
 // ─── Dummy Data ───────────────────────────────────────────────────────────────
 const stockAlertData = [
@@ -55,6 +57,42 @@ const priceHistoryData = [
 
 const PIE_COLORS = ["#3b82f6", "#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd"];
 
+// ─── Login Page ───────────────────────────────────────────────────────────────
+function LoginPage({ onLogin, error }) {
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="bg-white rounded-2xl shadow-lg p-10 w-full max-w-md text-center">
+        <div className="w-14 h-14 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-5">
+          <span className="text-white text-2xl">⚙</span>
+        </div>
+        <h1 className="text-2xl font-bold text-gray-800 mb-1">자재 관리 시스템</h1>
+        <p className="text-sm text-gray-400 mb-8">MRP Dashboard — 삼진</p>
+
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg px-4 py-3 mb-5">
+            {error}
+          </div>
+        )}
+
+        <button
+          onClick={onLogin}
+          className="w-full flex items-center justify-center gap-3 border border-gray-200 rounded-xl px-5 py-3.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-all shadow-sm hover:shadow-md"
+        >
+          <svg className="w-5 h-5" viewBox="0 0 24 24">
+            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+          </svg>
+          Google 계정으로 로그인
+        </button>
+
+        <p className="text-xs text-gray-400 mt-5">허가된 계정만 접속할 수 있습니다.</p>
+      </div>
+    </div>
+  );
+}
+
 // ─── Sub Components ───────────────────────────────────────────────────────────
 const StatusBadge = ({ status }) => {
   const map = {
@@ -62,11 +100,7 @@ const StatusBadge = ({ status }) => {
     주의: "bg-amber-100 text-amber-700 border border-amber-200",
     정상: "bg-emerald-100 text-emerald-700 border border-emerald-200",
   };
-  return (
-    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${map[status]}`}>
-      {status}
-    </span>
-  );
+  return <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${map[status]}`}>{status}</span>;
 };
 
 const StockBar = ({ current, min }) => {
@@ -74,10 +108,7 @@ const StockBar = ({ current, min }) => {
   const color = ratio < 60 ? "#ef4444" : ratio < 90 ? "#f59e0b" : "#10b981";
   return (
     <div className="w-full bg-gray-100 rounded-full h-1.5">
-      <div
-        className="h-1.5 rounded-full transition-all duration-500"
-        style={{ width: `${ratio}%`, backgroundColor: color }}
-      />
+      <div className="h-1.5 rounded-full transition-all duration-500" style={{ width: `${ratio}%`, backgroundColor: color }} />
     </div>
   );
 };
@@ -93,9 +124,7 @@ const UploadButton = () => (
 
 const StatCard = ({ label, value, sub, icon, color }) => (
   <div className="bg-white rounded-xl border border-gray-100 p-4 flex items-center gap-4 shadow-sm">
-    <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-xl ${color}`}>
-      {icon}
-    </div>
+    <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-xl ${color}`}>{icon}</div>
     <div>
       <p className="text-xs text-gray-400 font-medium">{label}</p>
       <p className="text-2xl font-bold text-gray-800 leading-tight">{value}</p>
@@ -114,7 +143,6 @@ function StockForecastPage({ isHost }) {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-gray-800">자재 부족 예측 툴</h2>
@@ -122,18 +150,13 @@ function StockForecastPage({ isHost }) {
         </div>
         {isHost && <UploadButton />}
       </div>
-
-      {/* Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="전체 자재 종류" value="47" sub="등록된 품목" icon="📦" color="bg-blue-50" />
         <StatCard label="위험 재고" value={danger} sub="즉시 발주 필요" icon="🚨" color="bg-red-50" />
         <StatCard label="주의 재고" value={warning} sub="모니터링 필요" icon="⚠️" color="bg-amber-50" />
         <StatCard label="정상 재고" value={stockAlertData.length - danger - warning} sub="안정 수준" icon="✅" color="bg-emerald-50" />
       </div>
-
-      {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Line Chart */}
         <div className="lg:col-span-2 bg-white rounded-xl border border-gray-100 p-5 shadow-sm">
           <h3 className="text-sm font-semibold text-gray-700 mb-4">월별 소비량 / 입고량 / 재고 추이</h3>
           <ResponsiveContainer width="100%" height={200}>
@@ -149,8 +172,6 @@ function StockForecastPage({ isHost }) {
             </LineChart>
           </ResponsiveContainer>
         </div>
-
-        {/* Pie Chart */}
         <div className="bg-white rounded-xl border border-gray-100 p-5 shadow-sm">
           <h3 className="text-sm font-semibold text-gray-700 mb-4">카테고리별 비중</h3>
           <ResponsiveContainer width="100%" height={200}>
@@ -164,20 +185,12 @@ function StockForecastPage({ isHost }) {
           </ResponsiveContainer>
         </div>
       </div>
-
-      {/* Filter + Table */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-50">
           <h3 className="text-sm font-semibold text-gray-700">재고 현황 목록</h3>
           <div className="flex gap-1.5 flex-wrap">
             {categories.map(c => (
-              <button
-                key={c}
-                onClick={() => setFilter(c)}
-                className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-all ${filter === c ? "bg-blue-600 text-white shadow-sm" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
-              >
-                {c}
-              </button>
+              <button key={c} onClick={() => setFilter(c)} className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-all ${filter === c ? "bg-blue-600 text-white shadow-sm" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}>{c}</button>
             ))}
           </div>
         </div>
@@ -216,17 +229,11 @@ function StockForecastPage({ isHost }) {
 function BomPricePage({ isHost }) {
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("change");
-  const filtered = bomData.filter(r =>
-    r.product.includes(search) || r.material.includes(search) || r.supplier.includes(search)
-  );
-  const sorted = [...filtered].sort((a, b) =>
-    sortBy === "change" ? Math.abs(b.change) - Math.abs(a.change) :
-    sortBy === "price" ? b.unitPrice - a.unitPrice : 0
-  );
+  const filtered = bomData.filter(r => r.product.includes(search) || r.material.includes(search) || r.supplier.includes(search));
+  const sorted = [...filtered].sort((a, b) => sortBy === "change" ? Math.abs(b.change) - Math.abs(a.change) : b.unitPrice - a.unitPrice);
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-gray-800">BOM 단가 원북</h2>
@@ -234,18 +241,14 @@ function BomPricePage({ isHost }) {
         </div>
         {isHost && <UploadButton />}
       </div>
-
-      {/* Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="등록 BOM 항목" value="128" sub="전체 품목" icon="📋" color="bg-indigo-50" />
         <StatCard label="가격 상승 품목" value="5" sub="전월 대비" icon="📈" color="bg-red-50" />
         <StatCard label="가격 하락 품목" value="3" sub="전월 대비" icon="📉" color="bg-blue-50" />
         <StatCard label="평균 변동률" value="+2.4%" sub="이번 달" icon="💹" color="bg-amber-50" />
       </div>
-
-      {/* Price History Chart */}
       <div className="bg-white rounded-xl border border-gray-100 p-5 shadow-sm">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4">주요 자재 단가 이력 (원/kg 또는 원/EA)</h3>
+        <h3 className="text-sm font-semibold text-gray-700 mb-4">주요 자재 단가 이력</h3>
         <ResponsiveContainer width="100%" height={200}>
           <BarChart data={priceHistoryData} barGap={4}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
@@ -259,24 +262,12 @@ function BomPricePage({ isHost }) {
           </BarChart>
         </ResponsiveContainer>
       </div>
-
-      {/* Filter + Table */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-50 gap-4 flex-wrap">
           <h3 className="text-sm font-semibold text-gray-700">단가 목록</h3>
           <div className="flex items-center gap-3">
-            <input
-              type="text"
-              placeholder="제품명 / 자재명 / 공급사 검색..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="text-sm border border-gray-200 rounded-lg px-3 py-2 w-56 focus:outline-none focus:ring-2 focus:ring-blue-400 transition"
-            />
-            <select
-              value={sortBy}
-              onChange={e => setSortBy(e.target.value)}
-              className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400 transition text-gray-600"
-            >
+            <input type="text" placeholder="제품명 / 자재명 / 공급사 검색..." value={search} onChange={e => setSearch(e.target.value)} className="text-sm border border-gray-200 rounded-lg px-3 py-2 w-56 focus:outline-none focus:ring-2 focus:ring-blue-400 transition" />
+            <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400 transition text-gray-600">
               <option value="change">변동률 순</option>
               <option value="price">단가 순</option>
             </select>
@@ -318,7 +309,7 @@ function BomPricePage({ isHost }) {
         </div>
         {!isHost && (
           <div className="px-5 py-3 bg-amber-50 border-t border-amber-100 text-xs text-amber-600 flex items-center gap-2">
-            <span>🔒</span> 게스트 모드: 데이터 조회 및 필터링만 가능합니다. 업로드·수정 기능은 관리자(호스트)에게 문의하세요.
+            <span>🔒</span> 게스트 모드: 데이터 조회 및 필터링만 가능합니다.
           </div>
         )}
       </div>
@@ -328,9 +319,46 @@ function BomPricePage({ isHost }) {
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [role, setRole] = useState("guest");
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [activePage, setActivePage] = useState("stock");
-  const isHost = role === "host";
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      if (u && ALLOWED_EMAILS.includes(u.email)) {
+        setUser(u);
+        setError("");
+      } else if (u) {
+        setError("접근 권한이 없는 계정입니다. 관리자에게 문의하세요.");
+        auth.signOut();
+        setUser(null);
+      } else {
+        setUser(null);
+      }
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, []);
+
+  const handleLogin = async () => {
+    try {
+      setError("");
+      await loginWithGoogle();
+    } catch (e) {
+      setError("로그인 중 오류가 발생했습니다. 다시 시도해주세요.");
+    }
+  };
+
+  if (loading) return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="text-gray-400 text-sm">로딩 중...</div>
+    </div>
+  );
+
+  if (!user) return <LoginPage onLogin={handleLogin} error={error} />;
+
+  const isHost = HOST_EMAILS.includes(user.email);
 
   const navItems = [
     { id: "stock", label: "자재 부족 예측 툴", icon: "📦", num: "01" },
@@ -339,9 +367,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-gray-50 font-sans overflow-hidden">
-      {/* Sidebar */}
       <aside className="w-64 bg-white border-r border-gray-100 flex flex-col shadow-sm flex-shrink-0">
-        {/* Logo */}
         <div className="px-5 py-5 border-b border-gray-100">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
@@ -353,76 +379,36 @@ export default function App() {
             </div>
           </div>
         </div>
-
-        {/* Nav */}
         <nav className="flex-1 p-3 space-y-1">
           <p className="text-xs font-semibold text-gray-300 uppercase tracking-widest px-3 py-2">메인 메뉴</p>
           {navItems.map(item => (
-            <button
-              key={item.id}
-              onClick={() => setActivePage(item.id)}
-              className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium transition-all text-left ${
-                activePage === item.id
-                  ? "bg-blue-600 text-white shadow-md shadow-blue-200"
-                  : "text-gray-500 hover:bg-gray-50 hover:text-gray-800"
-              }`}
-            >
+            <button key={item.id} onClick={() => setActivePage(item.id)}
+              className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium transition-all text-left ${activePage === item.id ? "bg-blue-600 text-white shadow-md shadow-blue-200" : "text-gray-500 hover:bg-gray-50 hover:text-gray-800"}`}>
               <span className={`text-xs font-bold tabular-nums ${activePage === item.id ? "text-blue-200" : "text-gray-300"}`}>{item.num}</span>
               <span className="text-base">{item.icon}</span>
               <span className="leading-tight">{item.label}</span>
             </button>
           ))}
         </nav>
-
-        {/* Role info bottom */}
-        <div className="p-4 border-t border-gray-100">
+        <div className="p-4 border-t border-gray-100 space-y-3">
           <div className={`rounded-xl p-3 text-xs ${isHost ? "bg-blue-50 text-blue-700" : "bg-gray-50 text-gray-500"}`}>
             <p className="font-semibold">{isHost ? "🔑 관리자 (호스트)" : "👤 팀원 (게스트)"}</p>
-            <p className="mt-0.5 opacity-70">{isHost ? "모든 기능 사용 가능" : "조회 및 필터링만 가능"}</p>
+            <p className="mt-0.5 opacity-70 truncate">{user.email}</p>
           </div>
+          <button onClick={logout} className="w-full text-xs text-gray-400 hover:text-red-500 transition-colors py-1">로그아웃</button>
         </div>
       </aside>
-
-      {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top Bar */}
         <header className="h-14 bg-white border-b border-gray-100 flex items-center justify-between px-6 flex-shrink-0">
           <div className="flex items-center gap-2 text-sm text-gray-400">
             <span className="text-gray-300">/</span>
-            <span className="font-medium text-gray-700">
-              {activePage === "stock" ? "자재 부족 예측 툴" : "BOM 단가 원북"}
-            </span>
+            <span className="font-medium text-gray-700">{activePage === "stock" ? "자재 부족 예측 툴" : "BOM 단가 원북"}</span>
           </div>
-
-          {/* Role Toggle */}
           <div className="flex items-center gap-3">
-            <span className="text-xs text-gray-400 font-medium">모드 전환</span>
-            <div className="flex items-center bg-gray-100 rounded-xl p-1 gap-1">
-              <button
-                onClick={() => setRole("guest")}
-                className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-all ${
-                  role === "guest"
-                    ? "bg-white text-gray-800 shadow-sm"
-                    : "text-gray-400 hover:text-gray-600"
-                }`}
-              >
-                👤 게스트
-              </button>
-              <button
-                onClick={() => setRole("host")}
-                className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-all ${
-                  role === "host"
-                    ? "bg-blue-600 text-white shadow-sm"
-                    : "text-gray-400 hover:text-gray-600"
-                }`}
-              >
-                🔑 호스트
-              </button>
-            </div>
+            <img src={user.photoURL} alt="" className="w-7 h-7 rounded-full" />
+            <span className="text-sm text-gray-600 font-medium">{user.displayName}</span>
           </div>
         </header>
-
-        {/* Page Content */}
         <main className="flex-1 overflow-y-auto p-6">
           {activePage === "stock" && <StockForecastPage isHost={isHost} />}
           {activePage === "bom" && <BomPricePage isHost={isHost} />}
