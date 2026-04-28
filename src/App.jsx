@@ -188,17 +188,18 @@ function inferCategory(item) {
   return "기타";
 }
 
-function parseSamjinSimulation(workbook, XLSX) {
-  // Pick the latest weekly sheet (e.g. 26W14)
+function getWeeklySheetNames(workbook) {
   const wpat = /^(\d{2})W(\d{2})$/;
-  const sheets = workbook.SheetNames
+  return workbook.SheetNames
     .filter(n => wpat.test(n))
     .map(n => { const m = n.match(wpat); return { name: n, sk: +m[1] * 100 + +m[2] }; })
-    .sort((a, b) => b.sk - a.sk);
-  if (sheets.length === 0) return null;
+    .sort((a, b) => b.sk - a.sk)
+    .map(s => s.name);
+}
 
-  const sheetName = sheets[0].name;
+function parseSamjinSheet(workbook, sheetName, XLSX) {
   const ws = workbook.Sheets[sheetName];
+  if (!ws) return null;
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
 
   // Locate header row
@@ -279,6 +280,18 @@ function parseSamjinSimulation(workbook, XLSX) {
     .sort((a, b) => b.value - a.value);
 
   return { materials: mats, forecastData, categoryData, sourceSheet: sheetName };
+}
+
+function parseAllSamjinSheets(workbook, XLSX) {
+  const sheetNames = getWeeklySheetNames(workbook);
+  if (sheetNames.length === 0) return null;
+  const result = {};
+  for (const name of sheetNames) {
+    const parsed = parseSamjinSheet(workbook, name, XLSX);
+    if (parsed) result[name] = parsed;
+  }
+  if (Object.keys(result).length === 0) return null;
+  return { sheets: result, sheetNames: Object.keys(result) };
 }
 
 const VENDOR_CATEGORIES = ["금속", "전자", "체결", "소모품", "전선", "고무", "화학", "유압", "기타"];
@@ -423,6 +436,9 @@ function StockForecastPage({ isHost, companyId }) {
   const [forecastData, setForecastData] = useState(COMPANY_DATA[companyId].forecastData);
   const [categoryData, setCategoryData] = useState(COMPANY_DATA[companyId].categoryData);
   const [sourceLabel, setSourceLabel] = useState("");
+  const [parsedSheets, setParsedSheets] = useState(null); // { sheets: {name: {materials, forecastData, categoryData}}, sheetNames: [] }
+  const [selectedSheet, setSelectedSheet] = useState("");
+  const [fileName, setFileName] = useState("");
 
   useEffect(() => {
     setStockData(COMPANY_DATA[companyId].stockData);
@@ -430,7 +446,22 @@ function StockForecastPage({ isHost, companyId }) {
     setCategoryData(COMPANY_DATA[companyId].categoryData);
     setFilter("전체");
     setSourceLabel("");
+    setParsedSheets(null);
+    setSelectedSheet("");
+    setFileName("");
   }, [companyId]);
+
+  // Switch displayed data when user picks a different sheet
+  const handleSelectSheet = (name) => {
+    if (!parsedSheets || !parsedSheets.sheets[name]) return;
+    const s = parsedSheets.sheets[name];
+    setStockData(s.materials);
+    setForecastData(s.forecastData);
+    setCategoryData(s.categoryData);
+    setSelectedSheet(name);
+    setSourceLabel(`${fileName} · ${name}`);
+    setFilter("전체");
+  };
 
   const categories = ["전체", ...new Set(stockData.map(d => d.category))];
   const filtered = filter === "전체" ? stockData : stockData.filter(d => d.category === filter);
@@ -446,17 +477,22 @@ function StockForecastPage({ isHost, companyId }) {
         try {
           const wb = XLSX.read(evt.target.result, { type: "array" });
 
-          // 1) Try Samjin weekly simulation format
-          const samjin = parseSamjinSimulation(wb, XLSX);
-          if (samjin) {
-            setStockData(samjin.materials);
-            setForecastData(samjin.forecastData);
-            setCategoryData(samjin.categoryData);
-            setSourceLabel(`${file.name} · ${samjin.sourceSheet}`);
+          // 1) Try Samjin weekly simulation format - parse ALL weekly sheets
+          const all = parseAllSamjinSheets(wb, XLSX);
+          if (all) {
+            const latest = all.sheetNames[0];
+            const s = all.sheets[latest];
+            setParsedSheets(all);
+            setFileName(file.name);
+            setSelectedSheet(latest);
+            setStockData(s.materials);
+            setForecastData(s.forecastData);
+            setCategoryData(s.categoryData);
+            setSourceLabel(`${file.name} · ${latest}`);
             setFilter("전체");
-            const d = samjin.materials.filter(m => m.status === "위험").length;
-            const w = samjin.materials.filter(m => m.status === "주의").length;
-            alert(`✅ 삼진 시뮬레이션 양식 인식\n· 시트: ${samjin.sourceSheet}\n· 자재: ${samjin.materials.length}개 (위험 ${d} · 주의 ${w})`);
+            const d = s.materials.filter(m => m.status === "위험").length;
+            const w = s.materials.filter(m => m.status === "주의").length;
+            alert(`✅ 삼진 시뮬레이션 양식 인식\n· 인식된 시트: ${all.sheetNames.length}개 (${all.sheetNames.join(", ")})\n· 표시 중: ${latest} (자재 ${s.materials.length}개 · 위험 ${d} · 주의 ${w})\n\n상단 드롭다운으로 다른 주차로 전환할 수 있습니다.`);
             return;
           }
 
@@ -472,6 +508,9 @@ function StockForecastPage({ isHost, companyId }) {
           if (mapped.length > 0) {
             setStockData(mapped);
             setSourceLabel(file.name);
+            setParsedSheets(null);
+            setSelectedSheet("");
+            setFileName(file.name);
             alert(`${mapped.length}개 자재 데이터 업로드 완료`);
           } else {
             alert("⚠️ 양식을 인식할 수 없습니다.\n\n지원 양식:\n• 삼진 주간 시뮬레이션 (시트명 25W18, 26W14 등)\n• 단순 양식 (자재명/카테고리/현재고/단위/최소기준수량 컬럼)");
@@ -489,6 +528,17 @@ function StockForecastPage({ isHost, companyId }) {
   return (
     <div className="space-y-5">
       <SectionHeader title="자재 부족 예측 툴" desc={sourceLabel ? `데이터 출처: ${sourceLabel}` : "실시간 재고 현황 및 소비 예측 분석"}>
+        {parsedSheets && parsedSheets.sheetNames.length > 1 && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-[var(--text-muted)] font-medium">주차</span>
+            <select value={selectedSheet} onChange={e => handleSelectSheet(e.target.value)}
+              className="text-[12px] bg-white border border-[var(--border)] rounded-md px-2.5 py-1.5 focus:outline-none focus:border-[var(--accent)] font-mono">
+              {parsedSheets.sheetNames.map((n, i) => (
+                <option key={n} value={n}>{n}{i === 0 ? " (최신)" : ""}</option>
+              ))}
+            </select>
+          </div>
+        )}
         {isHost && <UploadButton label="재고 엑셀 업로드" onUpload={handleUpload} />}
       </SectionHeader>
 
