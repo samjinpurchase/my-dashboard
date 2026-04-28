@@ -164,7 +164,122 @@ const COMPANY_DATA = {
   },
 };
 
-const PIE_COLORS = ["#c15f3c", "#b8896b", "#8a8578", "#c9b89c", "#d7c5a8"];
+const PIE_COLORS = ["#c15f3c", "#b8896b", "#8a8578", "#c9b89c", "#d7c5a8", "#a67c5a", "#d4a574", "#7d6f5d"];
+
+// ─── Excel format auto-detect (Samjin Material Simulation) ──────────
+function inferCategory(item) {
+  const n = String(item || "").toLowerCase();
+  if (/switch|button|key/.test(n)) return "스위치/버튼";
+  if (/sensor|accelerometer|gyro|magnet/.test(n)) return "센서";
+  if (/eeprom|fram|flash|memory|sram|dram/.test(n)) return "메모리";
+  if (/\bic\b|mcu|driver|detector|controller|chip|processor|regulator/.test(n)) return "IC";
+  if (/connector|jack|socket|header|terminal|fpc/.test(n)) return "커넥터";
+  if (/capacitor|cap\b|resistor|inductor|res\b/.test(n)) return "수동소자";
+  if (/oled|lcd|display|panel/.test(n)) return "디스플레이";
+  if (/led|lamp/.test(n)) return "LED";
+  if (/battery|cell/.test(n)) return "배터리";
+  if (/pcb|board/.test(n)) return "PCB";
+  if (/cable|wire|harness/.test(n)) return "전선";
+  if (/buzzer|speaker|microphone|mic\b/.test(n)) return "음향";
+  if (/antenna/.test(n)) return "안테나";
+  if (/crystal|oscillator|xtal/.test(n)) return "발진기";
+  if (/diode|rectifier|tvs/.test(n)) return "다이오드";
+  if (/transistor|fet|mosfet/.test(n)) return "트랜지스터";
+  return "기타";
+}
+
+function parseSamjinSimulation(workbook, XLSX) {
+  // Pick the latest weekly sheet (e.g. 26W14)
+  const wpat = /^(\d{2})W(\d{2})$/;
+  const sheets = workbook.SheetNames
+    .filter(n => wpat.test(n))
+    .map(n => { const m = n.match(wpat); return { name: n, sk: +m[1] * 100 + +m[2] }; })
+    .sort((a, b) => b.sk - a.sk);
+  if (sheets.length === 0) return null;
+
+  const sheetName = sheets[0].name;
+  const ws = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+
+  // Locate header row
+  let hi = -1;
+  for (let i = 0; i < Math.min(5, rows.length); i++) {
+    const row = rows[i].map(v => String(v || ""));
+    if (row.some(v => /재고/.test(v) && /기준/.test(v)) &&
+        row.some(v => v.trim() === "Item") &&
+        row.some(v => v.trim() === "Sort")) { hi = i; break; }
+  }
+  if (hi === -1) return null;
+
+  const header = rows[hi].map(v => String(v || "").replace(/\s+/g, " ").trim());
+  const sub = (rows[hi + 1] || []).map(v => String(v || "").trim());
+  const idxOf = (p) => header.findIndex(p);
+  const C = {
+    code: idxOf(h => h === "CODE"),
+    item: idxOf(h => h === "Item"),
+    maker: idxOf(h => h === "Maker"),
+    lt: idxOf(h => /^L\/T/.test(h)),
+    stock: idxOf(h => /재고/.test(h)),
+    sort: idxOf(h => h === "Sort"),
+    ttl: idxOf(h => /2025.*TTL/i.test(h) && !/Last Ver/i.test(h)),
+  };
+  if (C.item < 0 || C.stock < 0 || C.sort < 0) return null;
+
+  // Monthly TTL columns (first 6 months)
+  const m6 = [];
+  for (let j = (C.ttl || 0) + 1; j < sub.length && m6.length < 6; j++) {
+    if (sub[j] === "TTL") m6.push(j);
+  }
+
+  const labels = ["1월", "2월", "3월", "4월", "5월", "6월"];
+  const cons = Array(6).fill(0), rcv = Array(6).fill(0), bal = Array(6).fill(0);
+  const mats = [];
+  const seen = new Map();
+
+  for (let i = hi + 2; i < rows.length; i++) {
+    const r = rows[i];
+    const s = String(r[C.sort] || "").trim();
+    if (s.startsWith("FCST")) {
+      const baseName = String(r[C.item] || "").trim();
+      if (!baseName) continue;
+      const code = String(r[C.code] || "").trim();
+      // Disambiguate duplicates by appending code suffix
+      let name = baseName;
+      if (seen.has(baseName)) name = `${baseName} (${code.slice(-5) || seen.get(baseName) + 1})`;
+      seen.set(baseName, (seen.get(baseName) || 0) + 1);
+
+      const stock = Number(r[C.stock]) || 0;
+      const ltm = String(r[C.lt] || "").match(/(\d+)/);
+      const ltWeeks = ltm ? +ltm[1] : 8;
+      const ttl = Number(r[C.ttl]) || 0;
+      const minStock = Math.max(0, Math.round((ttl / 52) * Math.max(ltWeeks, 4)));
+      const ratio = minStock > 0 ? (stock / minStock) * 100 : 100;
+      const status = minStock === 0 ? "정상" : ratio < 60 ? "위험" : ratio < 90 ? "주의" : "정상";
+
+      mats.push({ name, category: inferCategory(baseName), current: stock, min: minStock, unit: "EA", status });
+      m6.forEach((c, mi) => { cons[mi] += Number(r[c]) || 0; });
+    } else if (s === "ETA (AIR)" || s === "ETA(AIR)") {
+      m6.forEach((c, mi) => { rcv[mi] += Number(r[c]) || 0; });
+    } else if (s === "Balance") {
+      m6.forEach((c, mi) => { bal[mi] += Number(r[c]) || 0; });
+    }
+  }
+
+  if (mats.length === 0) return null;
+
+  const forecastData = labels.map((month, i) => ({
+    month, 소비량: cons[i], 입고량: rcv[i], 재고: Math.max(0, bal[i]),
+  }));
+
+  const cmap = {};
+  mats.forEach(m => { cmap[m.category] = (cmap[m.category] || 0) + 1; });
+  const total = mats.length;
+  const categoryData = Object.entries(cmap)
+    .map(([name, count]) => ({ name, value: Math.round((count / total) * 100) }))
+    .sort((a, b) => b.value - a.value);
+
+  return { materials: mats, forecastData, categoryData, sourceSheet: sheetName };
+}
 
 const VENDOR_CATEGORIES = ["금속", "전자", "체결", "소모품", "전선", "고무", "화학", "유압", "기타"];
 
@@ -305,9 +420,17 @@ const chartTooltip = { contentStyle: { borderRadius: 6, border: "1px solid #e8e4
 function StockForecastPage({ isHost, companyId }) {
   const [filter, setFilter] = useState("전체");
   const [stockData, setStockData] = useState(COMPANY_DATA[companyId].stockData);
-  const data = COMPANY_DATA[companyId];
+  const [forecastData, setForecastData] = useState(COMPANY_DATA[companyId].forecastData);
+  const [categoryData, setCategoryData] = useState(COMPANY_DATA[companyId].categoryData);
+  const [sourceLabel, setSourceLabel] = useState("");
 
-  useEffect(() => { setStockData(COMPANY_DATA[companyId].stockData); setFilter("전체"); }, [companyId]);
+  useEffect(() => {
+    setStockData(COMPANY_DATA[companyId].stockData);
+    setForecastData(COMPANY_DATA[companyId].forecastData);
+    setCategoryData(COMPANY_DATA[companyId].categoryData);
+    setFilter("전체");
+    setSourceLabel("");
+  }, [companyId]);
 
   const categories = ["전체", ...new Set(stockData.map(d => d.category))];
   const filtered = filter === "전체" ? stockData : stockData.filter(d => d.category === filter);
@@ -320,17 +443,43 @@ function StockForecastPage({ isHost, companyId }) {
     import("xlsx").then(XLSX => {
       const reader = new FileReader();
       reader.onload = (evt) => {
-        const wb = XLSX.read(evt.target.result, { type: "array" });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(ws);
-        const mapped = rows.map(r => ({
-          name: r["자재명"] || "", category: r["카테고리"] || "",
-          current: Number(r["현재고"] || 0), unit: r["단위"] || "",
-          min: Number(r["최소기준수량"] || 0),
-          status: Number(r["현재고"]) / Number(r["최소기준수량"]) * 100 < 60 ? "위험" : Number(r["현재고"]) / Number(r["최소기준수량"]) * 100 < 90 ? "주의" : "정상",
-        })).filter(r => r.name);
-        if (mapped.length > 0) { setStockData(mapped); alert(`${mapped.length}개 자재 데이터 업로드 완료`); }
-        else alert("데이터를 읽을 수 없습니다. 양식을 확인해주세요.");
+        try {
+          const wb = XLSX.read(evt.target.result, { type: "array" });
+
+          // 1) Try Samjin weekly simulation format
+          const samjin = parseSamjinSimulation(wb, XLSX);
+          if (samjin) {
+            setStockData(samjin.materials);
+            setForecastData(samjin.forecastData);
+            setCategoryData(samjin.categoryData);
+            setSourceLabel(`${file.name} · ${samjin.sourceSheet}`);
+            setFilter("전체");
+            const d = samjin.materials.filter(m => m.status === "위험").length;
+            const w = samjin.materials.filter(m => m.status === "주의").length;
+            alert(`✅ 삼진 시뮬레이션 양식 인식\n· 시트: ${samjin.sourceSheet}\n· 자재: ${samjin.materials.length}개 (위험 ${d} · 주의 ${w})`);
+            return;
+          }
+
+          // 2) Fallback: simple format
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json(ws);
+          const mapped = rows.map(r => ({
+            name: r["자재명"] || "", category: r["카테고리"] || "",
+            current: Number(r["현재고"] || 0), unit: r["단위"] || "",
+            min: Number(r["최소기준수량"] || 0),
+            status: Number(r["현재고"]) / Number(r["최소기준수량"]) * 100 < 60 ? "위험" : Number(r["현재고"]) / Number(r["최소기준수량"]) * 100 < 90 ? "주의" : "정상",
+          })).filter(r => r.name);
+          if (mapped.length > 0) {
+            setStockData(mapped);
+            setSourceLabel(file.name);
+            alert(`${mapped.length}개 자재 데이터 업로드 완료`);
+          } else {
+            alert("⚠️ 양식을 인식할 수 없습니다.\n\n지원 양식:\n• 삼진 주간 시뮬레이션 (시트명 25W18, 26W14 등)\n• 단순 양식 (자재명/카테고리/현재고/단위/최소기준수량 컬럼)");
+          }
+        } catch (err) {
+          console.error(err);
+          alert("⚠️ 파일 읽기 오류: " + err.message);
+        }
       };
       reader.readAsArrayBuffer(file);
     });
@@ -339,7 +488,7 @@ function StockForecastPage({ isHost, companyId }) {
 
   return (
     <div className="space-y-5">
-      <SectionHeader title="자재 부족 예측 툴" desc="실시간 재고 현황 및 소비 예측 분석">
+      <SectionHeader title="자재 부족 예측 툴" desc={sourceLabel ? `데이터 출처: ${sourceLabel}` : "실시간 재고 현황 및 소비 예측 분석"}>
         {isHost && <UploadButton label="재고 엑셀 업로드" onUpload={handleUpload} />}
       </SectionHeader>
 
@@ -355,7 +504,7 @@ function StockForecastPage({ isHost, companyId }) {
           <Card title="월별 소비·입고·재고 추이">
             <div className="p-4">
               <ResponsiveContainer width="100%" height={200}>
-                <LineChart data={data.forecastData}>
+                <LineChart data={forecastData}>
                   <CartesianGrid strokeDasharray="2 4" stroke="#e8e4da" vertical={false} />
                   <XAxis dataKey="month" {...chartAxis} />
                   <YAxis {...chartAxis} />
@@ -373,8 +522,8 @@ function StockForecastPage({ isHost, companyId }) {
           <div className="p-4">
             <ResponsiveContainer width="100%" height={200}>
               <PieChart>
-                <Pie data={data.categoryData} cx="50%" cy="50%" innerRadius={42} outerRadius={70} paddingAngle={2} dataKey="value">
-                  {data.categoryData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                <Pie data={categoryData} cx="50%" cy="50%" innerRadius={42} outerRadius={70} paddingAngle={2} dataKey="value">
+                  {categoryData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                 </Pie>
                 <Tooltip {...chartTooltip} formatter={(v) => `${v}%`} />
                 <Legend iconType="circle" iconSize={6} wrapperStyle={{ fontSize: 10 }} />
