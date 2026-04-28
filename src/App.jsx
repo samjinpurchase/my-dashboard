@@ -189,11 +189,20 @@ function inferCategory(item) {
 }
 
 function getWeeklySheetNames(workbook) {
-  const wpat = /^(\d{2})W(\d{2})$/;
+  // Match prefix only — supports "26W14", "26W02_normal", "26W03 (2)", "26W16 (2)"
+  const wpat = /^(\d{2})W(\d{2})/;
   return workbook.SheetNames
     .filter(n => wpat.test(n))
-    .map(n => { const m = n.match(wpat); return { name: n, sk: +m[1] * 100 + +m[2] }; })
-    .sort((a, b) => b.sk - a.sk)
+    .map(n => {
+      const m = n.match(wpat);
+      return { name: n, sk: +m[1] * 100 + +m[2], suffix: n.slice(m[0].length) };
+    })
+    .sort((a, b) => {
+      if (b.sk !== a.sk) return b.sk - a.sk;
+      if (!a.suffix && b.suffix) return -1;
+      if (a.suffix && !b.suffix) return 1;
+      return a.suffix.localeCompare(b.suffix);
+    })
     .map(s => s.name);
 }
 
@@ -202,11 +211,11 @@ function parseSamjinSheet(workbook, sheetName, XLSX) {
   if (!ws) return null;
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
 
-  // Locate header row
+  // Locate header row — relaxed: 재고 + Item + Sort, scan first 6 rows
   let hi = -1;
-  for (let i = 0; i < Math.min(5, rows.length); i++) {
+  for (let i = 0; i < Math.min(6, rows.length); i++) {
     const row = rows[i].map(v => String(v || ""));
-    if (row.some(v => /재고/.test(v) && /기준/.test(v)) &&
+    if (row.some(v => /재고/.test(v) && !/일수|증감/.test(v)) &&
         row.some(v => v.trim() === "Item") &&
         row.some(v => v.trim() === "Sort")) { hi = i; break; }
   }
@@ -220,15 +229,23 @@ function parseSamjinSheet(workbook, sheetName, XLSX) {
     item: idxOf(h => h === "Item"),
     maker: idxOf(h => h === "Maker"),
     lt: idxOf(h => /^L\/T/.test(h)),
-    stock: idxOf(h => /재고/.test(h)),
+    stock: idxOf(h => /재고/.test(h) && !/일수|증감/.test(h)),
     sort: idxOf(h => h === "Sort"),
-    ttl: idxOf(h => /2025.*TTL/i.test(h) && !/Last Ver/i.test(h)),
   };
-  if (C.item < 0 || C.stock < 0 || C.sort < 0) return null;
+  // Annual TTL: pick the LATEST year's TTL column (e.g., 2026 over 2024/2025)
+  const annualTtls = [];
+  for (let j = 0; j < header.length; j++) {
+    const h = header[j];
+    if (/^\d{4}\s*TTL$/i.test(h)) {
+      annualTtls.push({ idx: j, year: +h.match(/\d{4}/)[0] });
+    }
+  }
+  C.ttl = annualTtls.sort((a, b) => b.year - a.year)[0]?.idx ?? -1;
+  if (C.item < 0 || C.stock < 0 || C.sort < 0 || C.ttl < 0) return null;
 
-  // Monthly TTL columns (first 6 months)
+  // Monthly TTL columns (first 6 months) — sub-header row contains "TTL" labels
   const m6 = [];
-  for (let j = (C.ttl || 0) + 1; j < sub.length && m6.length < 6; j++) {
+  for (let j = C.ttl + 1; j < sub.length && m6.length < 6; j++) {
     if (sub[j] === "TTL") m6.push(j);
   }
 
@@ -237,33 +254,64 @@ function parseSamjinSheet(workbook, sheetName, XLSX) {
   const mats = [];
   const seen = new Map();
 
-  for (let i = hi + 2; i < rows.length; i++) {
+  // Iterate by material block — start at FCST row, scan up to next FCST or 6 rows
+  let i = hi + 2;
+  while (i < rows.length) {
     const r = rows[i];
     const s = String(r[C.sort] || "").trim();
-    if (s.startsWith("FCST")) {
-      const baseName = String(r[C.item] || "").trim();
-      if (!baseName) continue;
-      const code = String(r[C.code] || "").trim();
-      // Disambiguate duplicates by appending code suffix
-      let name = baseName;
-      if (seen.has(baseName)) name = `${baseName} (${code.slice(-5) || seen.get(baseName) + 1})`;
-      seen.set(baseName, (seen.get(baseName) || 0) + 1);
+    if (!s.startsWith("FCST")) { i++; continue; }
 
-      const stock = Number(r[C.stock]) || 0;
-      const ltm = String(r[C.lt] || "").match(/(\d+)/);
-      const ltWeeks = ltm ? +ltm[1] : 8;
-      const ttl = Number(r[C.ttl]) || 0;
-      const minStock = Math.max(0, Math.round((ttl / 52) * Math.max(ltWeeks, 4)));
-      const ratio = minStock > 0 ? (stock / minStock) * 100 : 100;
-      const status = minStock === 0 ? "정상" : ratio < 60 ? "위험" : ratio < 90 ? "주의" : "정상";
+    const baseName = String(r[C.item] || "").trim();
+    if (!baseName) { i++; continue; }
+    const code = String(r[C.code] || "").trim();
+    let name = baseName;
+    if (seen.has(baseName)) name = `${baseName} (${code.slice(-5) || seen.get(baseName) + 1})`;
+    seen.set(baseName, (seen.get(baseName) || 0) + 1);
 
-      mats.push({ name, category: inferCategory(baseName), current: stock, min: minStock, unit: "EA", status });
-      m6.forEach((c, mi) => { cons[mi] += Number(r[c]) || 0; });
-    } else if (s === "ETA (AIR)" || s === "ETA(AIR)") {
-      m6.forEach((c, mi) => { rcv[mi] += Number(r[c]) || 0; });
-    } else if (s === "Balance") {
-      m6.forEach((c, mi) => { bal[mi] += Number(r[c]) || 0; });
+    const stock = Number(r[C.stock]) || 0;
+    const ltm = String(r[C.lt] || "").match(/(\d+)/);
+    const ltWeeks = ltm ? +ltm[1] : 8;
+
+    // Find quantity data within material block (FCST row + next 5 rows or until next FCST)
+    let blockEnd = i + 1;
+    while (blockEnd < rows.length && blockEnd < i + 7) {
+      const ns = String(rows[blockEnd][C.sort] || "").trim();
+      if (ns.startsWith("FCST")) break;
+      blockEnd++;
     }
+
+    // Collect TTL + monthly quantities (consumption from FCST/RTF, receipt from ETA, balance from Balance)
+    let annualTtl = Number(r[C.ttl]) || 0;
+    const localCons = Array(6).fill(0), localRcv = Array(6).fill(0), localBal = Array(6).fill(0);
+
+    for (let j = i; j < blockEnd; j++) {
+      const rj = rows[j];
+      const sj = String(rj[C.sort] || "").trim();
+      if (annualTtl === 0) {
+        const v = Number(rj[C.ttl]) || 0;
+        if (v > 0) annualTtl = v;
+      }
+      if (sj.startsWith("FCST") || sj === "RTF") {
+        m6.forEach((c, mi) => { localCons[mi] = Math.max(localCons[mi], Number(rj[c]) || 0); });
+      } else if (/^ETA/.test(sj) || sj === "PO Q'TY") {
+        m6.forEach((c, mi) => { localRcv[mi] += Number(rj[c]) || 0; });
+      } else if (sj === "Balance") {
+        m6.forEach((c, mi) => { const v = Number(rj[c]) || 0; if (v !== 0) localBal[mi] = v; });
+      }
+    }
+
+    const minStock = Math.max(0, Math.round((annualTtl / 52) * Math.max(ltWeeks, 4)));
+    const ratio = minStock > 0 ? (stock / minStock) * 100 : 100;
+    const status = minStock === 0 ? "정상" : ratio < 60 ? "위험" : ratio < 90 ? "주의" : "정상";
+
+    mats.push({ name, category: inferCategory(baseName), current: stock, min: minStock, unit: "EA", status });
+    for (let mi = 0; mi < 6; mi++) {
+      cons[mi] += localCons[mi];
+      rcv[mi] += localRcv[mi];
+      bal[mi] += localBal[mi];
+    }
+
+    i = blockEnd;
   }
 
   if (mats.length === 0) return null;
