@@ -6,7 +6,9 @@ import {
 import { auth, loginWithGoogle, logout, ALLOWED_EMAILS, HOST_EMAILS } from "./firebase";
 import { onAuthStateChanged } from "firebase/auth";
 
-const DEV_BYPASS_AUTH = import.meta.env.DEV && new URLSearchParams(window.location.search).has("preview");
+// ⚠️ TEMP: ?preview 쿼리로 인증 우회 (Firebase 도메인 등록 전 임시 사용)
+// Firebase 2단계 인증 + Authorized domain 등록 후에는 `&& import.meta.env.DEV`를 다시 추가하세요.
+const DEV_BYPASS_AUTH = new URLSearchParams(window.location.search).has("preview");
 
 const COMPANIES = [
   { id: "indonesia", name: "인도네시아 법인", short: "ID" },
