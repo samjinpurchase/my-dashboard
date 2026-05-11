@@ -823,6 +823,11 @@ function VendorPage({ isHost }) {
 
   const handleClose = () => { setShowModal(false); setFormError(""); setForm(emptyForm); };
 
+  const handleDelete = (vendor) => {
+    if (!confirm(`'${vendor.name}' 업체를 삭제할까요?\n\n삭제된 업체는 복구할 수 없습니다.`)) return;
+    setVendors(prev => prev.filter(v => v.id !== vendor.id));
+  };
+
   const active = vendors.filter(v => v.status === "거래중").length;
   const review = vendors.filter(v => v.status === "거래 검토").length;
   const stopped = vendors.filter(v => v.status === "거래 중단").length;
@@ -880,14 +885,15 @@ function VendorPage({ isHost }) {
                 <th className="px-4 py-2 text-left font-medium">이메일</th>
                 <th className="px-4 py-2 text-center font-medium">상태</th>
                 <th className="px-4 py-2 text-center font-medium">등록일</th>
+                {isHost && <th className="px-4 py-2 text-center font-medium w-12"></th>}
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 && (
-                <tr><td colSpan={8} className="px-4 py-10 text-center text-[12px] text-[var(--text-faint)]">등록된 업체가 없습니다.</td></tr>
+                <tr><td colSpan={isHost ? 9 : 8} className="px-4 py-10 text-center text-[12px] text-[var(--text-faint)]">등록된 업체가 없습니다.</td></tr>
               )}
               {filtered.map((v) => (
-                <tr key={v.id} className="border-b border-[var(--border-soft)] last:border-0 hover:bg-[var(--border-soft)]/30">
+                <tr key={v.id} className="group border-b border-[var(--border-soft)] last:border-0 hover:bg-[var(--border-soft)]/30">
                   <td className="px-4 py-2.5 font-mono text-[10px] text-[var(--text-faint)]">{v.id}</td>
                   <td className="px-4 py-2.5 font-medium text-[var(--text)]">{v.name}</td>
                   <td className="px-4 py-2.5 text-[var(--text-muted)]">{v.category}</td>
@@ -896,6 +902,15 @@ function VendorPage({ isHost }) {
                   <td className="px-4 py-2.5 text-[var(--text-faint)] text-[11px]">{v.email || "—"}</td>
                   <td className="px-4 py-2.5 text-center"><StatusBadge status={v.status} /></td>
                   <td className="px-4 py-2.5 text-center text-[10px] text-[var(--text-faint)]">{v.registeredAt}</td>
+                  {isHost && (
+                    <td className="px-2 py-2.5 text-center">
+                      <button onClick={() => handleDelete(v)}
+                        title="업체 삭제"
+                        className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-red-500 transition-opacity p-1 rounded hover:bg-red-50">
+                        <Icon path={ICONS.close} className="w-3.5 h-3.5" />
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -910,11 +925,19 @@ function VendorPage({ isHost }) {
           {filtered.map((v) => (
             <div key={v.id} className="px-4 py-3">
               <div className="flex items-start justify-between gap-2 mb-1">
-                <div>
+                <div className="min-w-0 flex-1">
                   <p className="text-[13px] font-medium text-[var(--text)]">{v.name}</p>
                   <p className="text-[10px] text-[var(--text-faint)] font-mono mt-0.5">{v.id} · {v.registeredAt}</p>
                 </div>
-                <StatusBadge status={v.status} />
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <StatusBadge status={v.status} />
+                  {isHost && (
+                    <button onClick={() => handleDelete(v)} title="업체 삭제"
+                      className="text-[var(--text-faint)] hover:text-red-500 p-1 rounded hover:bg-red-50 transition-colors">
+                      <Icon path={ICONS.close} className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2 text-[11px]">
                 <div><span className="text-[var(--text-faint)]">카테고리 </span><span className="text-[var(--text-muted)]">{v.category}</span></div>
