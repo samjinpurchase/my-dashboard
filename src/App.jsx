@@ -990,6 +990,319 @@ const Field = ({ label, required, children }) => (
   </label>
 );
 
+// ─── localStorage helpers ───────────────────────────────
+const ls = {
+  get(key, fallback) {
+    try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+    catch { return fallback; }
+  },
+  set(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ }
+  },
+};
+
+// ─── Schedule (Calendar) ────────────────────────────────
+const EVENT_COLORS = [
+  { name: "테라코타", value: "#c15f3c", bg: "#f5ede6" },
+  { name: "올리브", value: "#7d8c5e", bg: "#eef0e6" },
+  { name: "블루", value: "#5a7a99", bg: "#e6edf3" },
+  { name: "퍼플", value: "#8b6f99", bg: "#efe8f3" },
+  { name: "그레이", value: "#6b6760", bg: "#ebe9e4" },
+];
+
+function SchedulePage() {
+  const today = new Date();
+  const [year, setYear] = useState(today.getFullYear());
+  const [month, setMonth] = useState(today.getMonth()); // 0-11
+  const [events, setEvents] = useState(() => ls.get("mrp_events", []));
+  const [showModal, setShowModal] = useState(false);
+  const [editingEvent, setEditingEvent] = useState(null);
+  const emptyForm = { title: "", date: "", time: "", color: EVENT_COLORS[0].value, note: "" };
+  const [form, setForm] = useState(emptyForm);
+
+  useEffect(() => { ls.set("mrp_events", events); }, [events]);
+
+  const firstDay = new Date(year, month, 1);
+  const startWeekday = firstDay.getDay(); // 0=Sun
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const daysInPrevMonth = new Date(year, month, 0).getDate();
+
+  // Build 6 weeks x 7 days grid
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) {
+    cells.push({ day: daysInPrevMonth - startWeekday + i + 1, otherMonth: true, dateStr: "" });
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    cells.push({ day: d, otherMonth: false, dateStr });
+  }
+  while (cells.length < 42) {
+    cells.push({ day: cells.length - daysInMonth - startWeekday + 1, otherMonth: true, dateStr: "" });
+  }
+
+  const goPrev = () => { if (month === 0) { setYear(y => y - 1); setMonth(11); } else setMonth(m => m - 1); };
+  const goNext = () => { if (month === 11) { setYear(y => y + 1); setMonth(0); } else setMonth(m => m + 1); };
+  const goToday = () => { setYear(today.getFullYear()); setMonth(today.getMonth()); };
+
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const eventsByDate = events.reduce((acc, ev) => { (acc[ev.date] ||= []).push(ev); return acc; }, {});
+
+  const openAdd = (dateStr) => {
+    setEditingEvent(null);
+    setForm({ ...emptyForm, date: dateStr });
+    setShowModal(true);
+  };
+  const openEdit = (ev) => {
+    setEditingEvent(ev);
+    setForm({ title: ev.title, date: ev.date, time: ev.time || "", color: ev.color, note: ev.note || "" });
+    setShowModal(true);
+  };
+  const handleSave = () => {
+    if (!form.title.trim() || !form.date) return;
+    if (editingEvent) {
+      setEvents(prev => prev.map(e => e.id === editingEvent.id ? { ...editingEvent, ...form } : e));
+    } else {
+      setEvents(prev => [...prev, { id: Date.now() + Math.random(), ...form }]);
+    }
+    setShowModal(false);
+  };
+  const handleDelete = () => {
+    if (editingEvent) {
+      setEvents(prev => prev.filter(e => e.id !== editingEvent.id));
+      setShowModal(false);
+    }
+  };
+
+  const monthLabel = `${year}년 ${month + 1}월`;
+  const upcomingEvents = [...events]
+    .filter(e => e.date >= todayStr)
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.time || "").localeCompare(b.time || ""))
+    .slice(0, 5);
+
+  return (
+    <div className="space-y-5">
+      <SectionHeader title="스케줄" desc="월간 일정 관리 — 클릭으로 일정 추가">
+        <button onClick={goToday}
+          className="text-[12px] px-3 py-1.5 border border-[var(--border)] bg-white hover:bg-[var(--border-soft)] rounded-md font-medium text-[var(--text)] transition-colors">
+          오늘
+        </button>
+        <div className="flex items-center bg-white border border-[var(--border)] rounded-md">
+          <button onClick={goPrev} className="px-2 py-1.5 hover:bg-[var(--border-soft)] text-[var(--text-muted)] rounded-l-md">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" /></svg>
+          </button>
+          <span className="text-[12px] font-medium text-[var(--text)] px-3 py-1.5 min-w-[90px] text-center">{monthLabel}</span>
+          <button onClick={goNext} className="px-2 py-1.5 hover:bg-[var(--border-soft)] text-[var(--text-muted)] rounded-r-md">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+          </button>
+        </div>
+        <button onClick={() => openAdd(todayStr)}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[var(--text)] hover:opacity-90 text-white text-[12px] font-medium rounded-md transition-opacity">
+          <Icon path={ICONS.plus} className="w-3.5 h-3.5" />
+          일정 추가
+        </button>
+      </SectionHeader>
+
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+        <div className="lg:col-span-3">
+          <Card>
+            <div className="grid grid-cols-7 border-b border-[var(--border-soft)]">
+              {["일", "월", "화", "수", "목", "금", "토"].map((d, i) => (
+                <div key={d} className={`text-center text-[10px] font-medium uppercase tracking-wide py-2 ${i === 0 ? "text-red-500" : i === 6 ? "text-blue-500" : "text-[var(--text-muted)]"}`}>{d}</div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7">
+              {cells.map((cell, i) => {
+                const isToday = cell.dateStr === todayStr;
+                const dayEvents = cell.dateStr ? (eventsByDate[cell.dateStr] || []) : [];
+                const weekday = i % 7;
+                return (
+                  <div key={i}
+                    onClick={() => cell.dateStr && openAdd(cell.dateStr)}
+                    className={`min-h-[72px] sm:min-h-[92px] p-1.5 border-r border-b border-[var(--border-soft)] last:border-r-0 [&:nth-child(7n)]:border-r-0 cursor-pointer hover:bg-[var(--border-soft)]/30 transition-colors ${cell.otherMonth ? "bg-[var(--border-soft)]/20" : ""}`}>
+                    <div className={`text-[11px] font-medium mb-1 ${cell.otherMonth ? "text-[var(--text-faint)]" : weekday === 0 ? "text-red-500" : weekday === 6 ? "text-blue-500" : "text-[var(--text)]"} ${isToday ? "inline-flex items-center justify-center w-5 h-5 rounded-full bg-[var(--accent)] text-white" : ""}`}>
+                      {cell.day}
+                    </div>
+                    <div className="space-y-0.5">
+                      {dayEvents.slice(0, 3).map(ev => (
+                        <div key={ev.id} onClick={e => { e.stopPropagation(); openEdit(ev); }}
+                          className="text-[10px] font-medium truncate px-1.5 py-0.5 rounded cursor-pointer hover:opacity-80"
+                          style={{ background: EVENT_COLORS.find(c => c.value === ev.color)?.bg || "#f5ede6", color: ev.color }}>
+                          {ev.time && <span className="font-mono mr-1">{ev.time}</span>}{ev.title}
+                        </div>
+                      ))}
+                      {dayEvents.length > 3 && (
+                        <div className="text-[9px] text-[var(--text-muted)] px-1.5">+{dayEvents.length - 3}개</div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        </div>
+
+        <div>
+          <Card title="다가오는 일정">
+            <div className="divide-y divide-[var(--border-soft)]">
+              {upcomingEvents.length === 0 && (
+                <div className="px-4 py-8 text-center text-[12px] text-[var(--text-faint)]">예정된 일정이 없습니다.</div>
+              )}
+              {upcomingEvents.map(ev => (
+                <div key={ev.id} onClick={() => openEdit(ev)}
+                  className="px-4 py-3 hover:bg-[var(--border-soft)]/30 cursor-pointer">
+                  <div className="flex items-start gap-2">
+                    <div className="w-1 self-stretch rounded-full mt-0.5" style={{ background: ev.color }} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[12px] font-medium text-[var(--text)] truncate">{ev.title}</p>
+                      <p className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono">
+                        {ev.date}{ev.time && ` · ${ev.time}`}
+                      </p>
+                      {ev.note && <p className="text-[11px] text-[var(--text-muted)] mt-1 line-clamp-2">{ev.note}</p>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      {showModal && (
+        <div className="fixed inset-0 bg-black/30 flex items-end sm:items-center justify-center z-50 sm:p-4" onClick={() => setShowModal(false)}>
+          <div className="bg-white w-full sm:max-w-md sm:rounded-lg rounded-t-xl border border-[var(--border)] shadow-xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--border-soft)]">
+              <h3 className="text-[13px] font-medium text-[var(--text)]">{editingEvent ? "일정 수정" : "일정 추가"}</h3>
+              <button onClick={() => setShowModal(false)} className="text-[var(--text-muted)] hover:text-[var(--text)]"><Icon path={ICONS.close} /></button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <Field label="제목" required>
+                <input type="text" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="일정 제목" className="evt-input" autoFocus />
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="날짜" required>
+                  <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} className="evt-input" />
+                </Field>
+                <Field label="시간 (선택)">
+                  <input type="time" value={form.time} onChange={e => setForm(f => ({ ...f, time: e.target.value }))} className="evt-input" />
+                </Field>
+              </div>
+              <Field label="색상">
+                <div className="flex gap-1.5">
+                  {EVENT_COLORS.map(c => (
+                    <button key={c.value} onClick={() => setForm(f => ({ ...f, color: c.value }))}
+                      title={c.name}
+                      className={`w-6 h-6 rounded-full transition-all ${form.color === c.value ? "ring-2 ring-offset-2 ring-[var(--text)]" : "opacity-70 hover:opacity-100"}`}
+                      style={{ background: c.value }} />
+                  ))}
+                </div>
+              </Field>
+              <Field label="메모 (선택)">
+                <textarea value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} rows="3" placeholder="추가 메모..." className="evt-input resize-none" />
+              </Field>
+            </div>
+            <div className="flex items-center justify-between gap-2 px-5 py-3 border-t border-[var(--border-soft)] bg-[var(--border-soft)]/30">
+              {editingEvent ? (
+                <button onClick={handleDelete} className="text-[12px] text-red-600 hover:text-red-700 font-medium">삭제</button>
+              ) : <span />}
+              <div className="flex items-center gap-2">
+                <button onClick={() => setShowModal(false)} className="px-3 py-1.5 text-[12px] font-medium text-[var(--text-muted)] hover:text-[var(--text)]">취소</button>
+                <button onClick={handleSave} className="px-3.5 py-1.5 bg-[var(--text)] hover:opacity-90 text-white text-[12px] font-medium rounded-md">저장</button>
+              </div>
+            </div>
+          </div>
+          <style>{`.evt-input{width:100%;font-size:12px;background:white;border:1px solid var(--border);border-radius:6px;padding:7px 10px;outline:none;color:var(--text)}.evt-input:focus{border-color:var(--accent)}`}</style>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Memo (Gallery) ─────────────────────────────────────
+function MemoPage() {
+  const [memos, setMemos] = useState(() => ls.get("mrp_memos", [
+    { id: 1, title: "발주 우선순위", content: "Bluetooth IC, FPC Connector는 즉시 발주 필요. L/T 20주.", updatedAt: new Date().toISOString() },
+    { id: 2, title: "Q3 미팅 안건", content: "1. PT Alumindo 단가 협상\n2. 청도 법인 재고 이관\n3. 신규 거래처 검토", updatedAt: new Date().toISOString() },
+  ]));
+  const [search, setSearch] = useState("");
+
+  useEffect(() => { ls.set("mrp_memos", memos); }, [memos]);
+
+  const update = (id, patch) => {
+    setMemos(prev => prev.map(m => m.id === id ? { ...m, ...patch, updatedAt: new Date().toISOString() } : m));
+  };
+  const addNew = () => {
+    const m = { id: Date.now(), title: "", content: "", updatedAt: new Date().toISOString() };
+    setMemos(prev => [m, ...prev]);
+  };
+  const remove = (id) => {
+    if (!confirm("이 메모를 삭제할까요?")) return;
+    setMemos(prev => prev.filter(m => m.id !== id));
+  };
+
+  const filtered = memos.filter(m => {
+    const q = search.toLowerCase();
+    return !q || m.title.toLowerCase().includes(q) || m.content.toLowerCase().includes(q);
+  });
+
+  const formatTime = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    const today = new Date();
+    const isToday = d.toDateString() === today.toDateString();
+    if (isToday) return `오늘 ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  };
+
+  return (
+    <div className="space-y-5">
+      <SectionHeader title="메모" desc="자유 형식 메모 — 자동 저장">
+        <div className="relative">
+          <Icon path={ICONS.search} className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-faint)]" />
+          <input type="text" placeholder="제목·내용 검색" value={search} onChange={e => setSearch(e.target.value)}
+            className="text-[12px] bg-white border border-[var(--border)] rounded-md pl-8 pr-3 py-1.5 w-44 focus:outline-none focus:border-[var(--accent)]" />
+        </div>
+        <button onClick={addNew}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[var(--text)] hover:opacity-90 text-white text-[12px] font-medium rounded-md">
+          <Icon path={ICONS.plus} className="w-3.5 h-3.5" />
+          새 메모
+        </button>
+      </SectionHeader>
+
+      {filtered.length === 0 ? (
+        <div className="bg-white border border-[var(--border)] rounded-lg py-16 text-center">
+          <p className="text-[12px] text-[var(--text-faint)]">
+            {memos.length === 0 ? "아직 메모가 없습니다. '새 메모'로 시작하세요." : "검색 결과가 없습니다."}
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {filtered.map(m => (
+            <div key={m.id} className="group bg-white border border-[var(--border)] rounded-lg p-3 hover:border-[var(--accent)] hover:shadow-sm transition-all">
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <input type="text" value={m.title} placeholder="제목 없음"
+                  onChange={e => update(m.id, { title: e.target.value })}
+                  className="flex-1 text-[13px] font-medium text-[var(--text)] bg-transparent border-0 outline-none placeholder:text-[var(--text-faint)] min-w-0" />
+                <button onClick={() => remove(m.id)}
+                  className="opacity-0 group-hover:opacity-100 text-[var(--text-faint)] hover:text-red-500 transition-opacity p-0.5 flex-shrink-0">
+                  <Icon path={ICONS.close} className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <textarea value={m.content} placeholder="메모를 작성하세요..."
+                onChange={e => update(m.id, { content: e.target.value })}
+                rows="6"
+                className="w-full text-[12px] text-[var(--text-muted)] bg-transparent border-0 outline-none resize-none placeholder:text-[var(--text-faint)] leading-relaxed" />
+              <div className="mt-2 pt-2 border-t border-[var(--border-soft)] flex items-center justify-between">
+                <span className="text-[10px] text-[var(--text-faint)] font-mono">{formatTime(m.updatedAt)}</span>
+                <span className="text-[10px] text-[var(--text-faint)]">{m.content.length}자</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── App Shell ──────────────────────────────────────────
 export default function App() {
   const [user, setUser] = useState(null);
@@ -1026,6 +1339,8 @@ export default function App() {
     { id: "stock", label: "자재 부족 예측", num: "01" },
     { id: "bom", label: "BOM 단가 원북", num: "02" },
     { id: "vendor", label: "업체 관련", num: "03" },
+    { id: "schedule", label: "스케줄", num: "04" },
+    { id: "memo", label: "메모", num: "05" },
   ];
   const activeLabel = navItems.find(n => n.id === activePage)?.label;
 
@@ -1144,6 +1459,8 @@ export default function App() {
             {activePage === "stock" && <StockForecastPage isHost={isHost} companyId={selectedCompany} />}
             {activePage === "bom" && <BomPricePage isHost={isHost} companyId={selectedCompany} />}
             {activePage === "vendor" && <VendorPage isHost={isHost} />}
+            {activePage === "schedule" && <SchedulePage />}
+            {activePage === "memo" && <MemoPage />}
           </div>
         </main>
       </div>
