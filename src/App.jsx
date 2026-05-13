@@ -399,7 +399,18 @@ function LoginPage({ onLogin, error }) {
           </svg>
           Google로 계속하기
         </button>
-        <p className="text-[11px] text-[var(--text-faint)] text-center mt-5">허가된 계정만 접속할 수 있습니다.</p>
+        <div className="my-4 flex items-center gap-3">
+          <div className="flex-1 h-px bg-[var(--border)]" />
+          <span className="text-[10px] text-[var(--text-faint)]">또는</span>
+          <div className="flex-1 h-px bg-[var(--border)]" />
+        </div>
+        <button
+          onClick={() => { const u = new URL(window.location.href); u.searchParams.set("preview", ""); window.location.href = u.toString(); }}
+          className="w-full flex items-center justify-center gap-2 bg-[var(--accent-soft)] hover:bg-[var(--accent-soft)]/70 border border-[var(--accent-soft)] rounded-md px-4 py-2.5 text-[13px] font-medium text-[var(--accent)] transition-colors">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+          미리보기로 둘러보기
+        </button>
+        <p className="text-[11px] text-[var(--text-faint)] text-center mt-5">허가된 계정만 정식 접속할 수 있습니다.</p>
       </div>
     </div>
   );
